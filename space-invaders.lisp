@@ -10,15 +10,23 @@
 (defparameter *input-state* nil)
 (defparameter *last-update* nil)
 (defparameter *player-state* nil)
+(defparameter +size+ 80)
+
+(defun top-left ()
+  (let ((d (/ +size+ 2)))
+    (vector (- d)
+            (- d))))
+
 
 
 (defun init-game-state! ()
-  (setf *game-controllers* nil)
-  (setf *haptic* nil)
-  (setf *player-state* (list :rotation 90.0
+  (setf *game-controllers* nil
+        *haptic* nil
+        *player-state* (list :rotation 90.0
                              :position #(0.0 0.0)
-                             :accel-start-time nil))
-  (setf *input-state* (list :left nil
+                             :accel-start-time nil
+                             :speed #(0 0))
+        *input-state* (list :left nil
                             :right nil
                             :quit nil))
   nil)
@@ -30,7 +38,7 @@
   (dotimes (i (sdl2:joystick-count))
     (when (sdl2:game-controller-p i)
       (format t "Found gamecontroller: ~a~%" (sdl2:game-controller-name-for-index i))
-      (let* ((gc (sdl2:game-controller-open i))
+      (let* ((gc  (sdl2:game-controller-open i))
              (joy (sdl2:game-controller-get-joystick gc)))
         (push (cons i gc) *game-controllers*)
         (when (sdl2:joystick-is-haptic-p joy)
@@ -39,13 +47,14 @@
             (sdl2:rumble-init h)))))))
 
 (defun setup-window! (gl-context win)
-  (let ((size/2 40))
+  (let ((d (/ +size+ 2)))
     (format t "Setting up window/gl.~%")
     (finish-output)
     (sdl2:gl-make-current win gl-context)
     (gl:viewport 0 0 800 600)
     (gl:matrix-mode :projection)
-    (gl:ortho (- size/2) size/2 (- size/2) size/2 (- size/2) size/2)
+    (gl:ortho (- d) d (- d) d
+              (- d) d)
     (gl:matrix-mode :modelview)
     (gl:load-identity)
     (gl:clear-color 0.01 0.01 0.01 1.0)
@@ -82,8 +91,13 @@
 (defun render-scene! ()
   (draw-player!))
 
+(defun rad->deg (alpha)
+  (* (/ alpha
+        (float pi alpha))
+     180))
+
 (defun rotatez! (theta)
-  (gl:rotate theta
+  (gl:rotate (rad->deg theta)
              0 0 1))
 
 (defun player-rotation ()
@@ -98,19 +112,15 @@
 (defun player-y ()
   (svref (player-position) 1))
 
-(defun translate! (dx dy)
-  (gl:translate dx dy 0))
-
-(defun player-rotation ()
-  (getf *player-state* :rotation))
+(defun translate! (ds)
+  (gl:translate (elt ds 0) (elt ds 1) 0))
 
 (defun draw-player! ()
   (gl:with-pushed-matrix* (:modelview)
-    (translate! (player-x) (player-y))
+    (translate! (player-position))
     (rotatez!   (player-rotation))
     (rotatez!   -90.0)
     (draw-triangle! 1.0 '(1.0 1.0 1.0))))
-
 
 (defparameter *keymap*
   '(:scancode-left   :left
@@ -165,6 +175,7 @@
       (setf (getf *player-state* :rotation) rot)
       (incf (getf *player-state* :rotation) rot)))
 
+
 (defun translate-player! (x y)
   (setf (getf *player-state* :position)
         (vector (+ (player-x) x)
@@ -179,27 +190,49 @@
 (defun player-accel-start-time ()
   (getf *player-state* :accel-start-time))
 
+(defun player-speed ()
+  (getf *player-state* :speed))
+
+(defun (setf player-speed) (new-value)
+  (setf (getf *player-state* :speed) new-value))
+
+(defun (setf player-rotation) (new-value)
+  (setf (getf *player-state* :rotation) new-value))
+
+(defun (setf player-position) (new-value)
+  (setf (getf *player-state* :position) new-value))
+
+(defun player-accel ()
+  (getf *player-state* :accel))
+
+(defun (setf player-accel) (new-value)
+  (setf (getf *player-state* :accel) new-value))
+
+(init-game-state!)
+
+(defun wrap (pos)
+  (let* ((d    (/ +size+ 2))
+         (offs (v+ pos (vector d d)))    ; offset from top left
+         (x    (- (mod (elt offs 0) +size+)
+                  d))
+         (y    (- (mod (elt offs 1) +size+)
+                  d)))
+    (vector x y)))
+
+
 (defun update-player! (last-update curr-update)
-  (let* ((dt (time-delta last-update curr-update))
-         (angular-velocity 180)
-         (speed (player-speed))
-         (rot (player-rotation))
-         (drot (* angular-velocity dt))
-         (ds (* speed dt))
-         (dx (* ds (cosd rot)))
-         (dy (* ds (sind rot))))
-    (cond
-      ((input-left?)
-       (rotate-player! drot))
-      ((input-right?)
-       (rotate-player! (- drot))))
-    (let* ((accel (if (input-forward? 1) 0))
-           (dspeed (* accel dt))
-           (dspeedv (vector (* dspeed (cosd rot))
-                            (* dspeed (sind rot))))
-           (speed (map 'vector (player-speed)
-                       (* accel dt))))
-      )))
+  (let* ((dt    (time-delta last-update curr-update))
+         (omega (cond ((input-left?)     pi)
+                      ((input-right?) (- pi))
+                      (t                  0)))
+         (drot  (* omega dt))
+         (a     (if (input-forward?) 2 0))
+         (dv    (vpolar (* a dt) (player-rotation)))
+         (ds    (sv* dt (player-speed))))
+
+    (setf (player-speed)    (v+ (player-speed)    dv)
+          (player-rotation) (+  (player-rotation) drot)
+          (player-position) (wrap (v+ (player-position) ds)))))
 
 
 (defun update-state! ()
@@ -240,8 +273,15 @@
 
     (:quit () t)))
 
+(defparameter *world* nil)
+
+(defun setup-physics! ()
+  (ode:init)
+  (setf *world* (ode:world-create)))
+
 (defun basic-test ()
   "The kitchen sink."
+  (setup-physics!)
   (sdl2:with-init (:everything)
     (print-sdl-info!)
     (sdl2:with-window (win :flags '(:shown :opengl))

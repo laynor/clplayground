@@ -8,4 +8,12 @@
                 :iota
                 :map-iota
                 :curry
-                :xor))
+                :xor)
+  (:import-from :trivial-types
+                tuple
+                proper-list))
+
+(defpackage #:ode.ext
+  (:use #:cl #:cl-arrows #:trivia)
+
+  )
